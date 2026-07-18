@@ -89,6 +89,30 @@
   }
   #torchBtn.on{background:rgba(255,214,10,.2); border-color:#FFD60A}
 
+  /* 줌 컨트롤 */
+  #zoomWrap{
+    position:absolute; left:12px; bottom:12px; z-index:4;
+    display:none; align-items:center; gap:8px;
+    background:rgba(12,15,19,.72); border:1px solid var(--line);
+    border-radius:22px; padding:6px 10px;
+  }
+  #zoomWrap button{
+    width:30px; height:30px; border-radius:50%; border:1px solid var(--line);
+    background:var(--panel2); color:var(--text); font-size:16px; font-weight:700;
+  }
+  #zoomVal{font-family:var(--mono); font-size:12px; color:var(--accent); min-width:32px; text-align:center}
+
+  /* 초점 표시(탭한 지점) */
+  .focus-ring{
+    position:absolute; width:64px; height:64px; margin:-32px 0 0 -32px;
+    border:2px solid var(--good); border-radius:50%; pointer-events:none; z-index:4;
+    animation:focusPulse .6s ease-out forwards;
+  }
+  @keyframes focusPulse{
+    0%{transform:scale(1.3); opacity:1}
+    100%{transform:scale(1); opacity:0}
+  }
+
   /* ── 시작/오류 오버레이 ── */
   .overlay{
     position:absolute; inset:0; background:var(--bg);
@@ -190,8 +214,13 @@
     <span class="hud-chip">경과 <b id="elapsed">0.0</b> s</span>
   </div>
 
-  <div id="hint">사각 틀 안에 바코드를 맞춰유</div>
+  <div id="hint">사각 틀 안에 바코드를 맞춰유 · 화면 탭하면 초점 맞춰유</div>
   <button id="torchBtn" aria-label="플래시">🔦</button>
+  <div id="zoomWrap">
+    <button id="zoomOut" aria-label="줌 아웃">−</button>
+    <span id="zoomVal">1.0x</span>
+    <button id="zoomIn" aria-label="줌 인">+</button>
+  </div>
 
   <!-- 시작 오버레이 -->
   <div class="overlay" id="startOverlay">
@@ -287,6 +316,7 @@
   var roiCanvas=document.createElement('canvas');
   var roiCtx=roiCanvas.getContext('2d', {willReadFrequently:true});
   var currentResult=null;
+  var zoomCaps=null, zoomVal=1, focusCaps=null;
 
   /* ── 환경 체크 ── */
   if (!window.isSecureContext){
@@ -357,7 +387,7 @@
       audio:false,
       video:{
         facingMode:{ideal:'environment'},
-        width:{ideal:1280}, height:{ideal:720},
+        width:{ideal:1920}, height:{ideal:1080},
         frameRate:{ideal:30}
       }
     };
@@ -371,6 +401,12 @@
           track.applyConstraints({advanced:[{focusMode:'continuous'}]}).catch(function(){});
         }
         if (caps.torch){ torchBtn.style.display='flex'; }
+        if (caps.zoom && caps.zoom.max > caps.zoom.min){
+          zoomCaps = caps.zoom;
+          zoomVal = track.getSettings().zoom || zoomCaps.min;
+          $('zoomWrap').style.display='flex';
+          updateZoomLabel();
+        }
       }catch(e){}
       return new Promise(function(res){
         if (video.readyState>=2) res();
@@ -498,6 +534,72 @@
     track.applyConstraints({advanced:[{torch:torchOn}]})
       .then(function(){ torchBtn.classList.toggle('on', torchOn); })
       .catch(function(){ torchOn=false; });
+  });
+
+  /* ── 줌 ── */
+  function updateZoomLabel(){
+    $('zoomVal').textContent = zoomVal.toFixed(1)+'x';
+  }
+  function applyZoom(nv){
+    if (!zoomCaps || !track) return;
+    nv = Math.max(zoomCaps.min, Math.min(zoomCaps.max, nv));
+    zoomVal = nv;
+    track.applyConstraints({advanced:[{zoom: zoomVal}]}).then(updateZoomLabel).catch(function(){});
+  }
+  $('zoomIn').addEventListener('click', function(){
+    var step = zoomCaps ? (zoomCaps.max-zoomCaps.min)/8 || 0.5 : 0.5;
+    applyZoom(zoomVal+step);
+  });
+  $('zoomOut').addEventListener('click', function(){
+    var step = zoomCaps ? (zoomCaps.max-zoomCaps.min)/8 || 0.5 : 0.5;
+    applyZoom(zoomVal-step);
+  });
+  // 핀치 줌 (두 손가락)
+  var pinchStartDist=0, pinchStartZoom=1;
+  video.addEventListener('touchmove', function(e){
+    if (e.touches.length===2 && zoomCaps){
+      e.preventDefault();
+      var dx=e.touches[0].clientX-e.touches[1].clientX;
+      var dy=e.touches[0].clientY-e.touches[1].clientY;
+      var dist=Math.hypot(dx,dy);
+      if (!pinchStartDist){ pinchStartDist=dist; pinchStartZoom=zoomVal; return; }
+      var ratio=dist/pinchStartDist;
+      applyZoom(pinchStartZoom*ratio);
+    }
+  }, {passive:false});
+  video.addEventListener('touchend', function(e){
+    if (e.touches.length<2) pinchStartDist=0;
+  });
+
+  /* ── 탭투포커스 ──
+     일부 기종은 focusDistance를, 일부는 pointsOfInterest를 지원하고
+     둘 다 없으면 continuous 모드를 껐다 켜서 재탐색을 유도함 */
+  document.getElementById('stage').addEventListener('click', function(e){
+    if (e.target.closest('#zoomWrap') || e.target.closest('#torchBtn') || e.target.closest('#sheet')) return;
+    if (!track) return;
+    // 시각적 피드백
+    var ring=document.createElement('div');
+    ring.className='focus-ring';
+    ring.style.left=e.clientX+'px'; ring.style.top=e.clientY+'px';
+    document.getElementById('stage').appendChild(ring);
+    setTimeout(function(){ ring.remove(); }, 650);
+
+    try{
+      var caps = track.getCapabilities ? track.getCapabilities() : {};
+      var rect = video.getBoundingClientRect();
+      var px = (e.clientX-rect.left)/rect.width;
+      var py = (e.clientY-rect.top)/rect.height;
+      if (caps.pointsOfInterest){
+        track.applyConstraints({advanced:[{pointsOfInterest:[{x:px, y:py}]}]}).catch(function(){});
+      } else if (caps.focusMode && caps.focusMode.indexOf('single-shot')>=0){
+        track.applyConstraints({advanced:[{focusMode:'single-shot'}]}).catch(function(){});
+      } else if (caps.focusMode && caps.focusMode.indexOf('continuous')>=0){
+        // 연속초점 재트리거: 껐다 켜서 다시 잡게 유도
+        track.applyConstraints({advanced:[{focusMode:'manual'}]}).then(function(){
+          return track.applyConstraints({advanced:[{focusMode:'continuous'}]});
+        }).catch(function(){});
+      }
+    }catch(err){}
   });
 
   /* ── 버튼 ── */
