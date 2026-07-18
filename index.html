@@ -211,6 +211,7 @@
 
   <div id="hud">
     <span class="hud-chip">분석 <b id="frameMs">–</b> ms/프레임</span>
+    <span class="hud-chip">해상도 <b id="actualRes">–</b></span>
     <span class="hud-chip">경과 <b id="elapsed">0.0</b> s</span>
   </div>
 
@@ -307,6 +308,7 @@
   var $ = function(id){ return document.getElementById(id); };
   var video=$('video'), finder=$('finder'), engineBadge=$('engineBadge');
   var frameMsEl=$('frameMs'), elapsedEl=$('elapsed'), hintEl=$('hint');
+  var actualResEl=$('actualRes');
   var sheet=$('sheet'), logEl=$('log'), torchBtn=$('torchBtn');
 
   var detector=null, engineName='';
@@ -381,19 +383,32 @@
     document.head.appendChild(s);
   }
 
-  /* ── 카메라 시작 ── */
-  function startCamera(){
+  /* ── 카메라 시작: 고해상도부터 순서대로 강제 시도 ── */
+  var RES_LADDER = [
+    {width:{exact:3840}, height:{exact:2160}},
+    {width:{exact:1920}, height:{exact:1080}},
+    {width:{exact:1280}, height:{exact:720}},
+    {width:{ideal:1920}, height:{ideal:1080}}  // 최종 폴백(협상 위임)
+  ];
+  function tryResolutions(idx){
+    var res = RES_LADDER[idx];
     var constraints = {
       audio:false,
-      video:{
-        facingMode:{ideal:'environment'},
-        width:{ideal:1920}, height:{ideal:1080},
-        frameRate:{ideal:30}
-      }
+      video:Object.assign({facingMode:{ideal:'environment'}, frameRate:{ideal:30}}, res)
     };
-    return navigator.mediaDevices.getUserMedia(constraints).then(function(s){
+    return navigator.mediaDevices.getUserMedia(constraints).catch(function(err){
+      if (idx < RES_LADDER.length-1) return tryResolutions(idx+1);
+      throw err;
+    });
+  }
+  function startCamera(){
+    return tryResolutions(0).then(function(s){
       stream=s; track=s.getVideoTracks()[0];
       video.srcObject=s;
+      try{
+        var settings = track.getSettings ? track.getSettings() : {};
+        actualResEl.textContent = (settings.width||'?')+'×'+(settings.height||'?');
+      }catch(e){}
       // 연속 초점 시도 (지원 기기 한정)
       try{
         var caps = track.getCapabilities ? track.getCapabilities() : {};
