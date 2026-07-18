@@ -211,7 +211,7 @@
 
   <div id="hud">
     <span class="hud-chip">분석 <b id="frameMs">–</b> ms/프레임</span>
-    <span class="hud-chip">해상도 <b id="actualRes">–</b></span>
+    <span class="hud-chip">해상도 <b id="actualRes">–</b><b id="photoBadge" style="display:none;color:#FFD60A"> +📷고화질</b></span>
     <span class="hud-chip">경과 <b id="elapsed">0.0</b> s</span>
   </div>
 
@@ -309,6 +309,7 @@
   var video=$('video'), finder=$('finder'), engineBadge=$('engineBadge');
   var frameMsEl=$('frameMs'), elapsedEl=$('elapsed'), hintEl=$('hint');
   var actualResEl=$('actualRes');
+  var photoBadgeEl=$('photoBadge');
   var sheet=$('sheet'), logEl=$('log'), torchBtn=$('torchBtn');
 
   var detector=null, engineName='';
@@ -319,6 +320,7 @@
   var roiCtx=roiCanvas.getContext('2d', {willReadFrequently:true});
   var currentResult=null;
   var zoomCaps=null, zoomVal=1, focusCaps=null;
+  var photoCapture=null, photoOpts={}, photoBusy=false, lastPhotoAt=0;
 
   /* ── 환경 체크 ── */
   if (!window.isSecureContext){
@@ -383,9 +385,10 @@
     document.head.appendChild(s);
   }
 
-  /* ── 카메라 시작: 고해상도부터 순서대로 강제 시도 ── */
+  /* ── 카메라 시작 ──
+     주의: exact 4K를 강제하면 일부 기기가 저화질 영상을 뻥튀기한 '가짜 4K'를 줌.
+     실시간 스트림은 화질 좋은 1080p로 받고, 고해상도는 ImageCapture 사진으로 해결 */
   var RES_LADDER = [
-    {width:{exact:3840}, height:{exact:2160}},
     {width:{exact:1920}, height:{exact:1080}},
     {width:{exact:1280}, height:{exact:720}},
     {width:{ideal:1920}, height:{ideal:1080}}  // 최종 폴백(협상 위임)
@@ -409,6 +412,21 @@
         var settings = track.getSettings ? track.getSettings() : {};
         actualResEl.textContent = (settings.width||'?')+'×'+(settings.height||'?');
       }catch(e){}
+      // ImageCapture 준비: 네이티브급 고화질 사진을 주기적으로 찍어 해독하는 2차 경로
+      photoCapture=null;
+      try{
+        if (window.ImageCapture){
+          photoCapture = new ImageCapture(track);
+          photoCapture.getPhotoCapabilities().then(function(pc){
+            photoOpts = {};
+            if (pc.imageWidth && pc.imageWidth.max){
+              // 너무 크면 해독이 느려지니 최대 4000px으로 제한
+              photoOpts.imageWidth = Math.min(pc.imageWidth.max, 4000);
+            }
+            photoBadgeEl.style.display='inline';
+          }).catch(function(){ photoOpts={}; photoBadgeEl.style.display='inline'; });
+        }
+      }catch(e){ photoCapture=null; }
       // 연속 초점 시도 (지원 기기 한정)
       try{
         var caps = track.getCapabilities ? track.getCapabilities() : {};
@@ -491,6 +509,27 @@
       }
     }
 
+    // ── 2차 경로: 1.2초마다 네이티브급 고화질 사진을 찍어 전체 프레임 해독 ──
+    if (photoCapture && !photoBusy && now-lastPhotoAt > 1200){
+      photoBusy=true; lastPhotoAt=now;
+      var takeP;
+      try{ takeP = photoCapture.takePhoto(photoOpts); }
+      catch(e){ takeP = photoCapture.takePhoto(); }
+      takeP.then(function(blob){
+        return createImageBitmap(blob);
+      }).then(function(bmp){
+        return detector.detect(bmp).then(function(codes){
+          try{ bmp.close(); }catch(e){}
+          if (scanning && codes && codes.length){
+            // 고화질 정지 사진은 신뢰도가 높으니 즉시 확정
+            confirmScan(codes[0].rawValue);
+          }
+        });
+      }).catch(function(){}).then(function(){
+        photoBusy=false;
+      });
+    }
+
     if (!busy && video.videoWidth>0){
       busy=true;
       var r = computeROI();
@@ -551,6 +590,7 @@
   }
 
   function confirmScan(code){
+    if (!scanning) return; // 이중 확정 방지 (실시간/사진 경로 경합)
     var ms = performance.now()-sessionStart;
     stopSession();
     finder.classList.add('locked');
