@@ -448,15 +448,34 @@
     clearInterval(timerInt);
   }
 
+  /* ── ROI 좌표 보정 ──
+     video는 object-fit:cover로 표시되므로, 화면에 보이는 사각 틀(ROI)과
+     실제 원본 프레임 좌표가 어긋날 수 있음. 이 어긋남을 여기서 정확히 계산해서
+     "눈에 보이는 것 = 실제로 분석하는 부분"이 되도록 보정함. */
+  function computeROI(){
+    var vw=video.videoWidth, vh=video.videoHeight;
+    var cw=video.clientWidth, ch=video.clientHeight;
+    if (!vw || !vh || !cw || !ch) return null;
+    var scale = Math.max(cw/vw, ch/vh);   // object-fit:cover가 실제로 쓰는 배율
+    var visW = cw/scale, visH = ch/scale; // 화면에 실제로 보이는 원본 프레임 크기
+    var offX = (vw-visW)/2, offY = (vh-visH)/2; // cover가 잘라낸 여백
+    return {
+      sx: offX + ROI.x*visW,
+      sy: offY + ROI.y*visH,
+      sw: ROI.w*visW,
+      sh: ROI.h*visH
+    };
+  }
+
   function loop(){
     if (!scanning) return;
     if (!busy && video.videoWidth>0){
       busy=true;
-      var vw=video.videoWidth, vh=video.videoHeight;
-      var sx=vw*ROI.x, sy=vh*ROI.y, sw=vw*ROI.w, sh=vh*ROI.h;
-      // ROI 크롭: 분석 픽셀 수를 ~1/3.5로 줄여서 프레임당 시간 단축
-      roiCanvas.width=sw|0; roiCanvas.height=sh|0;
-      roiCtx.drawImage(video, sx, sy, sw, sh, 0, 0, sw|0, sh|0);
+      var r = computeROI();
+      if (!r){ busy=false; rafId=requestAnimationFrame(loop); return; }
+      // ROI 크롭: 분석 픽셀 수를 줄여서 프레임당 시간 단축 + 화면과 좌표 일치
+      roiCanvas.width=r.sw|0; roiCanvas.height=r.sh|0;
+      roiCtx.drawImage(video, r.sx, r.sy, r.sw, r.sh, 0, 0, r.sw|0, r.sh|0);
       var t0=performance.now();
       detector.detect(roiCanvas).then(function(codes){
         frameMsEl.textContent=(performance.now()-t0).toFixed(0);
