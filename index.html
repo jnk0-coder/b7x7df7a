@@ -434,6 +434,8 @@
   function beginSession(){
     scanning=true; busy=false; lastVal=''; sameCount=0;
     sessionStart=performance.now();
+    lastFocusKick=performance.now();
+    variantIdx=0;
     finder.classList.remove('locked');
     hintEl.textContent='사각 틀 안에 바코드를 맞춰유';
     clearInterval(timerInt);
@@ -467,15 +469,51 @@
     };
   }
 
+  /* ── 스캔 루프: 3중 변형 순환 분석 ──
+     매 프레임마다 다른 "보기 방식"으로 분석해서 흐릿하거나 작은 바코드도 잡음
+     0: 원본 그대로
+     1: 흑백 + 대비 강화 (흐릿한 막대 경계를 진하게)
+     2: 중앙부 2배 확대 + 대비 강화 (작은 바코드용) */
+  var variantIdx=0;
+  var lastFocusKick=0;
+
   function loop(){
     if (!scanning) return;
+    var now=performance.now();
+
+    // 2.5초마다 자동 초점 재시도 (아직 못 잡았을 때)
+    if (now-lastFocusKick > 2500){
+      lastFocusKick=now;
+      kickFocus();
+      // 5초 경과 시 거리/줌 안내
+      if (now-sessionStart > 5000){
+        hintEl.textContent='안 잡히면: 폰을 15cm쯤 떨어뜨리고 줌(+)을 눌러보셔유';
+      }
+    }
+
     if (!busy && video.videoWidth>0){
       busy=true;
       var r = computeROI();
       if (!r){ busy=false; rafId=requestAnimationFrame(loop); return; }
-      // ROI 크롭: 분석 픽셀 수를 줄여서 프레임당 시간 단축 + 화면과 좌표 일치
-      roiCanvas.width=r.sw|0; roiCanvas.height=r.sh|0;
-      roiCtx.drawImage(video, r.sx, r.sy, r.sw, r.sh, 0, 0, r.sw|0, r.sh|0);
+
+      var v = variantIdx % 3;
+      variantIdx++;
+      roiCtx.filter='none';
+
+      if (v===2){
+        // 중앙 60% 영역을 2배 확대해서 분석 (작은 바코드 대응)
+        var cx=r.sx+r.sw*0.2, cy=r.sy+r.sh*0.2, cw2=r.sw*0.6, ch2=r.sh*0.6;
+        roiCanvas.width=(cw2*2)|0; roiCanvas.height=(ch2*2)|0;
+        roiCtx.filter='grayscale(1) contrast(1.7) brightness(1.05)';
+        roiCtx.imageSmoothingEnabled=false;
+        roiCtx.drawImage(video, cx, cy, cw2, ch2, 0, 0, roiCanvas.width, roiCanvas.height);
+      } else {
+        roiCanvas.width=r.sw|0; roiCanvas.height=r.sh|0;
+        if (v===1){ roiCtx.filter='grayscale(1) contrast(1.6)'; }
+        roiCtx.drawImage(video, r.sx, r.sy, r.sw, r.sh, 0, 0, r.sw|0, r.sh|0);
+      }
+      roiCtx.filter='none';
+
       var t0=performance.now();
       detector.detect(roiCanvas).then(function(codes){
         frameMsEl.textContent=(performance.now()-t0).toFixed(0);
@@ -487,6 +525,19 @@
       });
     }
     rafId=requestAnimationFrame(loop);
+  }
+
+  /* 초점 재시도: continuous를 껐다 켜서 카메라가 다시 초점 잡게 유도 */
+  function kickFocus(){
+    if (!track) return;
+    try{
+      var caps = track.getCapabilities ? track.getCapabilities() : {};
+      if (caps.focusMode && caps.focusMode.indexOf('continuous')>=0){
+        track.applyConstraints({advanced:[{focusMode:'manual'}]}).then(function(){
+          return track.applyConstraints({advanced:[{focusMode:'continuous'}]});
+        }).catch(function(){});
+      }
+    }catch(e){}
   }
 
   function handleCandidate(val){
