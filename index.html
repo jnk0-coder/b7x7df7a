@@ -89,6 +89,17 @@
   }
   #torchBtn.on{background:rgba(255,214,10,.2); border-color:#FFD60A}
 
+  /* 고화질 촬영 버튼 (네이티브 카메라 앱 호출) */
+  #shotBtn{
+    position:absolute; left:50%; bottom:52px; transform:translateX(-50%);
+    z-index:4; border:1px solid rgba(255,214,10,.5); border-radius:24px;
+    background:rgba(12,15,19,.8); color:#FFD60A;
+    font-size:14px; font-weight:700; padding:12px 20px;
+    font-family:inherit; backdrop-filter:blur(4px);
+  }
+  #shotBtn:active{background:rgba(255,214,10,.2)}
+  #shotBtn.working{color:var(--muted); border-color:var(--line)}
+
   /* 줌 컨트롤 */
   #zoomWrap{
     position:absolute; left:12px; bottom:12px; z-index:4;
@@ -211,11 +222,13 @@
 
   <div id="hud">
     <span class="hud-chip">분석 <b id="frameMs">–</b> ms/프레임</span>
-    <span class="hud-chip">해상도 <b id="actualRes">–</b><b id="photoBadge" style="display:none;color:#FFD60A"> +📷고화질</b></span>
+    <span class="hud-chip">해상도 <b id="actualRes">–</b></span>
     <span class="hud-chip">경과 <b id="elapsed">0.0</b> s</span>
   </div>
 
   <div id="hint">사각 틀 안에 바코드를 맞춰유 · 화면 탭하면 초점 맞춰유</div>
+  <button id="shotBtn">📷 고화질 촬영으로 인식</button>
+  <input type="file" id="shotInput" accept="image/*" capture="environment" style="display:none">
   <button id="torchBtn" aria-label="플래시">🔦</button>
   <div id="zoomWrap">
     <button id="zoomOut" aria-label="줌 아웃">−</button>
@@ -309,7 +322,6 @@
   var video=$('video'), finder=$('finder'), engineBadge=$('engineBadge');
   var frameMsEl=$('frameMs'), elapsedEl=$('elapsed'), hintEl=$('hint');
   var actualResEl=$('actualRes');
-  var photoBadgeEl=$('photoBadge');
   var sheet=$('sheet'), logEl=$('log'), torchBtn=$('torchBtn');
 
   var detector=null, engineName='';
@@ -320,7 +332,6 @@
   var roiCtx=roiCanvas.getContext('2d', {willReadFrequently:true});
   var currentResult=null;
   var zoomCaps=null, zoomVal=1, focusCaps=null;
-  var photoCapture=null, photoOpts={}, photoBusy=false, lastPhotoAt=0;
 
   /* ── 환경 체크 ── */
   if (!window.isSecureContext){
@@ -412,21 +423,6 @@
         var settings = track.getSettings ? track.getSettings() : {};
         actualResEl.textContent = (settings.width||'?')+'×'+(settings.height||'?');
       }catch(e){}
-      // ImageCapture 준비: 네이티브급 고화질 사진을 주기적으로 찍어 해독하는 2차 경로
-      photoCapture=null;
-      try{
-        if (window.ImageCapture){
-          photoCapture = new ImageCapture(track);
-          photoCapture.getPhotoCapabilities().then(function(pc){
-            photoOpts = {};
-            if (pc.imageWidth && pc.imageWidth.max){
-              // 너무 크면 해독이 느려지니 최대 4000px으로 제한
-              photoOpts.imageWidth = Math.min(pc.imageWidth.max, 4000);
-            }
-            photoBadgeEl.style.display='inline';
-          }).catch(function(){ photoOpts={}; photoBadgeEl.style.display='inline'; });
-        }
-      }catch(e){ photoCapture=null; }
       // 연속 초점 시도 (지원 기기 한정)
       try{
         var caps = track.getCapabilities ? track.getCapabilities() : {};
@@ -507,27 +503,6 @@
       if (now-sessionStart > 5000){
         hintEl.textContent='안 잡히면: 폰을 15cm쯤 떨어뜨리고 줌(+)을 눌러보셔유';
       }
-    }
-
-    // ── 2차 경로: 1.2초마다 네이티브급 고화질 사진을 찍어 전체 프레임 해독 ──
-    if (photoCapture && !photoBusy && now-lastPhotoAt > 1200){
-      photoBusy=true; lastPhotoAt=now;
-      var takeP;
-      try{ takeP = photoCapture.takePhoto(photoOpts); }
-      catch(e){ takeP = photoCapture.takePhoto(); }
-      takeP.then(function(blob){
-        return createImageBitmap(blob);
-      }).then(function(bmp){
-        return detector.detect(bmp).then(function(codes){
-          try{ bmp.close(); }catch(e){}
-          if (scanning && codes && codes.length){
-            // 고화질 정지 사진은 신뢰도가 높으니 즉시 확정
-            confirmScan(codes[0].rawValue);
-          }
-        });
-      }).catch(function(){}).then(function(){
-        photoBusy=false;
-      });
     }
 
     if (!busy && video.videoWidth>0){
@@ -700,7 +675,7 @@
      일부 기종은 focusDistance를, 일부는 pointsOfInterest를 지원하고
      둘 다 없으면 continuous 모드를 껐다 켜서 재탐색을 유도함 */
   document.getElementById('stage').addEventListener('click', function(e){
-    if (e.target.closest('#zoomWrap') || e.target.closest('#torchBtn') || e.target.closest('#sheet')) return;
+    if (e.target.closest('#zoomWrap') || e.target.closest('#torchBtn') || e.target.closest('#sheet') || e.target.closest('#shotBtn')) return;
     if (!track) return;
     // 시각적 피드백
     var ring=document.createElement('div');
@@ -725,6 +700,55 @@
         }).catch(function(){});
       }
     }catch(err){}
+  });
+
+  /* ── 고화질 촬영 인식: 네이티브 카메라 앱을 열어 12M급 원본으로 해독 ──
+     capture="environment" 파일 입력은 브라우저가 아니라 폰의 '진짜 카메라 앱'을 실행함.
+     네이티브 카메라의 정밀 초점/선명화 처리를 100% 활용하는 경로 */
+  var shotBtn=$('shotBtn'), shotInput=$('shotInput');
+  shotBtn.addEventListener('click', function(e){
+    e.stopPropagation();
+    shotInput.value='';
+    shotInput.click();
+  });
+  shotInput.addEventListener('change', function(){
+    var file=this.files && this.files[0];
+    if (!file) return;
+    shotBtn.classList.add('working');
+    shotBtn.textContent='해독 중…';
+    createImageBitmap(file).then(function(bmp){
+      // 너무 큰 사진은 4000px 이하로 축소해서 해독 속도 확보
+      var maxSide=Math.max(bmp.width, bmp.height);
+      var work=bmp;
+      var p=Promise.resolve(bmp);
+      if (maxSide>4000){
+        var sc=4000/maxSide;
+        var c=document.createElement('canvas');
+        c.width=(bmp.width*sc)|0; c.height=(bmp.height*sc)|0;
+        c.getContext('2d').drawImage(bmp,0,0,c.width,c.height);
+        p=Promise.resolve(c);
+      }
+      return p.then(function(src){
+        return detector.detect(src).then(function(codes){
+          try{ bmp.close(); }catch(e){}
+          return codes;
+        });
+      });
+    }).then(function(codes){
+      shotBtn.classList.remove('working');
+      shotBtn.textContent='📷 고화질 촬영으로 인식';
+      if (codes && codes.length){
+        scanning=true; // confirmScan 가드 통과용
+        confirmScan(codes[0].rawValue);
+      } else {
+        hintEl.textContent='사진에서도 못 읽었슈. 바코드가 화면에 크게 나오게 다시 찍어보셔유';
+        if (navigator.vibrate) navigator.vibrate([40,60,40]);
+      }
+    }).catch(function(){
+      shotBtn.classList.remove('working');
+      shotBtn.textContent='📷 고화질 촬영으로 인식';
+      hintEl.textContent='사진 처리에 실패했슈. 다시 시도해보셔유';
+    });
   });
 
   /* ── 버튼 ── */
