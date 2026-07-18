@@ -448,8 +448,8 @@
   function beginSession(){
     scanning=true; busy=false; lastVal=''; sameCount=0;
     sessionStart=performance.now();
-    lastFocusKick=performance.now();
-    variantIdx=0;
+    lastDetectAt=0; variantIdx=0;
+    hintEl.dataset.tip='';
     finder.classList.remove('locked');
     hintEl.textContent='사각 틀 안에 바코드를 맞춰유';
     clearInterval(timerInt);
@@ -483,53 +483,51 @@
     };
   }
 
-  /* ── 스캔 루프: 3중 변형 순환 분석 ──
-     매 프레임마다 다른 "보기 방식"으로 분석해서 흐릿하거나 작은 바코드도 잡음
-     0: 원본 그대로
-     1: 흑백 + 대비 강화 (흐릿한 막대 경계를 진하게)
-     2: 중앙부 2배 확대 + 대비 강화 (작은 바코드용) */
-  var variantIdx=0;
-  var lastFocusKick=0;
+  /* ── 스캔 루프 (V7: 부드러움 최우선) ──
+     원칙: 카메라는 건드리지 않고 놔둔다 (초점 강제 리셋 금지 — 끊김/흐릿함의 주범이었음)
+     - 검출은 120ms 간격(~8Hz)으로만: 스캔엔 충분하고 화면 렌더링을 방해하지 않음
+     - GPU 부담 큰 필터 제거, 캔버스는 재사용 (매 프레임 재할당 금지)
+     - 원본 ROI / 중앙 2배 확대, 두 방식만 번갈아 분석 */
+  var DETECT_INTERVAL = 120;
+  var lastDetectAt = 0;
+  var variantIdx = 0;
+  var zoomCanvas = document.createElement('canvas');
+  var zoomCtx = zoomCanvas.getContext('2d', {willReadFrequently:true});
 
   function loop(){
     if (!scanning) return;
-    var now=performance.now();
+    var now = performance.now();
 
-    // 2.5초마다 자동 초점 재시도 (아직 못 잡았을 때)
-    if (now-lastFocusKick > 2500){
-      lastFocusKick=now;
-      kickFocus();
-      // 5초 경과 시 거리/줌 안내
-      if (now-sessionStart > 5000){
-        hintEl.textContent='안 잡히면: 폰을 15cm쯤 떨어뜨리고 줌(+)을 눌러보셔유';
-      }
+    // 8초 넘게 못 잡으면 안내만 (카메라는 건드리지 않음)
+    if (now - sessionStart > 8000 && hintEl.dataset.tip !== '1'){
+      hintEl.dataset.tip = '1';
+      hintEl.textContent = '안 잡히면 아래 [📷 고화질 촬영] 버튼을 눌러보셔유';
     }
 
-    if (!busy && video.videoWidth>0){
-      busy=true;
+    if (!busy && now - lastDetectAt >= DETECT_INTERVAL && video.videoWidth > 0){
+      lastDetectAt = now;
+      busy = true;
       var r = computeROI();
       if (!r){ busy=false; rafId=requestAnimationFrame(loop); return; }
 
-      var v = variantIdx % 3;
-      variantIdx++;
-      roiCtx.filter='none';
-
-      if (v===2){
-        // 중앙 60% 영역을 2배 확대해서 분석 (작은 바코드 대응)
-        var cx=r.sx+r.sw*0.2, cy=r.sy+r.sh*0.2, cw2=r.sw*0.6, ch2=r.sh*0.6;
-        roiCanvas.width=(cw2*2)|0; roiCanvas.height=(ch2*2)|0;
-        roiCtx.filter='grayscale(1) contrast(1.7) brightness(1.05)';
-        roiCtx.imageSmoothingEnabled=false;
-        roiCtx.drawImage(video, cx, cy, cw2, ch2, 0, 0, roiCanvas.width, roiCanvas.height);
+      var target;
+      if (variantIdx++ % 2 === 0){
+        // A: 원본 ROI 그대로
+        var w=r.sw|0, h=r.sh|0;
+        if (roiCanvas.width!==w || roiCanvas.height!==h){ roiCanvas.width=w; roiCanvas.height=h; }
+        roiCtx.drawImage(video, r.sx, r.sy, r.sw, r.sh, 0, 0, w, h);
+        target = roiCanvas;
       } else {
-        roiCanvas.width=r.sw|0; roiCanvas.height=r.sh|0;
-        if (v===1){ roiCtx.filter='grayscale(1) contrast(1.6)'; }
-        roiCtx.drawImage(video, r.sx, r.sy, r.sw, r.sh, 0, 0, r.sw|0, r.sh|0);
+        // B: 중앙 60%를 2배 확대 (작은 바코드용, 필터 없음)
+        var cx=r.sx+r.sw*0.2, cy=r.sy+r.sh*0.2, cw2=r.sw*0.6, ch2=r.sh*0.6;
+        var zw=(cw2*2)|0, zh=(ch2*2)|0;
+        if (zoomCanvas.width!==zw || zoomCanvas.height!==zh){ zoomCanvas.width=zw; zoomCanvas.height=zh; }
+        zoomCtx.drawImage(video, cx, cy, cw2, ch2, 0, 0, zw, zh);
+        target = zoomCanvas;
       }
-      roiCtx.filter='none';
 
       var t0=performance.now();
-      detector.detect(roiCanvas).then(function(codes){
+      detector.detect(target).then(function(codes){
         frameMsEl.textContent=(performance.now()-t0).toFixed(0);
         if (scanning && codes && codes.length){
           handleCandidate(codes[0].rawValue);
@@ -539,19 +537,6 @@
       });
     }
     rafId=requestAnimationFrame(loop);
-  }
-
-  /* 초점 재시도: continuous를 껐다 켜서 카메라가 다시 초점 잡게 유도 */
-  function kickFocus(){
-    if (!track) return;
-    try{
-      var caps = track.getCapabilities ? track.getCapabilities() : {};
-      if (caps.focusMode && caps.focusMode.indexOf('continuous')>=0){
-        track.applyConstraints({advanced:[{focusMode:'manual'}]}).then(function(){
-          return track.applyConstraints({advanced:[{focusMode:'continuous'}]});
-        }).catch(function(){});
-      }
-    }catch(e){}
   }
 
   function handleCandidate(val){
