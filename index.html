@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0C0F13">
+<title>최저가 스나이퍼 · 바코드 스캐너 V1</title>
+<style>
+  :root{
+    --bg:#0C0F13; --panel:#12161C; --panel2:#171C24; --line:#232A35;
+    --text:#E8ECF1; --muted:#8A94A3; --laser:#FF3B30;
+    --good:#2ECC71; --bad:#FF6B5E; --accent:#4DA3FF;
+    --mono:'Roboto Mono','SF Mono',Consolas,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system,'Noto Sans KR','Malgun Gothic',sans-serif;
+    display:flex; flex-direction:column; overflow:hidden;
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+
+  /* ── 상단 바 ── */
+  header{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:12px 16px; border-bottom:1px solid var(--line); flex-shrink:0;
+  }
+  header h1{font-size:15px; font-weight:700; letter-spacing:-.3px}
+  header h1 small{color:var(--laser); font-family:var(--mono); font-size:11px; margin-left:6px}
+  .engine-badge{
+    font-family:var(--mono); font-size:10px; color:var(--muted);
+    border:1px solid var(--line); border-radius:4px; padding:3px 7px;
+  }
+  .engine-badge.on{color:var(--good); border-color:rgba(46,204,113,.4)}
+
+  /* ── 카메라 영역 ── */
+  #stage{position:relative; flex:1; min-height:0; background:#000; overflow:hidden}
+  #video{width:100%; height:100%; object-fit:cover}
+
+  /* 뷰파인더: 중앙 분석 띠(ROI)와 실제로 일치 */
+  #finder{
+    position:absolute; left:8%; right:8%; top:50%;
+    height:34%; transform:translateY(-50%);
+    border-radius:12px; pointer-events:none;
+    box-shadow:0 0 0 2000px rgba(0,0,0,.45);
+  }
+  #finder::before{
+    content:""; position:absolute; inset:0; border-radius:12px;
+    border:1.5px solid rgba(255,255,255,.55);
+  }
+  /* 시그니처: 레이저 스캔 라인 */
+  #laser{
+    position:absolute; left:6px; right:6px; top:50%; height:2px;
+    background:var(--laser);
+    box-shadow:0 0 8px 1px rgba(255,59,48,.8);
+    animation:sweep 1.3s ease-in-out infinite alternate;
+  }
+  @keyframes sweep{from{transform:translateY(-46px)}to{transform:translateY(46px)}}
+  @media (prefers-reduced-motion:reduce){#laser{animation:none}}
+  #finder.locked::before{border-color:var(--good)}
+  #finder.locked #laser{animation:none; background:var(--good); box-shadow:0 0 10px 2px rgba(46,204,113,.9)}
+
+  /* 실시간 속도 계기판 */
+  #hud{
+    position:absolute; top:12px; left:12px; right:12px;
+    display:flex; justify-content:space-between; pointer-events:none;
+  }
+  .hud-chip{
+    font-family:var(--mono); font-size:11px; color:var(--text);
+    background:rgba(12,15,19,.72); border:1px solid var(--line);
+    border-radius:6px; padding:5px 9px; backdrop-filter:blur(4px);
+  }
+  .hud-chip b{color:var(--accent); font-weight:700}
+
+  #hint{
+    position:absolute; bottom:14px; left:0; right:0; text-align:center;
+    font-size:13px; color:rgba(255,255,255,.85); pointer-events:none;
+    text-shadow:0 1px 3px rgba(0,0,0,.8);
+  }
+
+  /* 토치 버튼 */
+  #torchBtn{
+    position:absolute; right:12px; bottom:12px;
+    width:44px; height:44px; border-radius:50%;
+    background:rgba(12,15,19,.72); border:1px solid var(--line);
+    color:var(--text); font-size:18px; display:none;
+    align-items:center; justify-content:center;
+  }
+  #torchBtn.on{background:rgba(255,214,10,.2); border-color:#FFD60A}
+
+  /* ── 시작/오류 오버레이 ── */
+  .overlay{
+    position:absolute; inset:0; background:var(--bg);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:16px; padding:24px; text-align:center; z-index:5;
+  }
+  .overlay p{color:var(--muted); font-size:13px; line-height:1.6; max-width:300px}
+  .btn{
+    border:none; border-radius:10px; padding:14px 28px;
+    font-size:15px; font-weight:700; color:#fff; background:var(--laser);
+    font-family:inherit;
+  }
+  .btn.secondary{background:var(--panel2); border:1px solid var(--line); color:var(--text)}
+  .hidden{display:none !important}
+
+  /* ── 결과 시트 ── */
+  #sheet{
+    position:absolute; left:0; right:0; bottom:0; z-index:6;
+    background:var(--panel); border-top:1px solid var(--line);
+    border-radius:16px 16px 0 0; padding:16px 16px calc(16px + env(safe-area-inset-bottom));
+    transform:translateY(105%); transition:transform .22s ease-out;
+    max-height:78%; overflow-y:auto;
+  }
+  #sheet.open{transform:translateY(0)}
+  .speed-line{
+    display:flex; align-items:baseline; gap:8px; margin-bottom:12px;
+    font-family:var(--mono);
+  }
+  .speed-line .ms{font-size:30px; font-weight:700}
+  .speed-line .ms.pass{color:var(--good)} .speed-line .ms.fail{color:var(--bad)}
+  .speed-line .label{font-size:11px; color:var(--muted)}
+  .prod{
+    background:var(--panel2); border:1px solid var(--line); border-radius:12px;
+    padding:14px; margin-bottom:12px;
+  }
+  .prod .name{font-size:16px; font-weight:700; margin-bottom:2px}
+  .prod .brand{font-size:12px; color:var(--muted); margin-bottom:8px}
+  .prod .code{font-family:var(--mono); font-size:12px; color:var(--accent)}
+  .prod .mockTag{
+    display:inline-block; margin-left:6px; font-size:10px; color:#FFD60A;
+    border:1px solid rgba(255,214,10,.4); border-radius:4px; padding:1px 5px; vertical-align:1px;
+  }
+  .price-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px}
+  .price-card{
+    background:var(--panel2); border:1px solid var(--line); border-radius:12px; padding:12px;
+  }
+  .price-card .t{font-size:11px; color:var(--muted); margin-bottom:6px}
+  .price-card .v{font-family:var(--mono); font-size:18px; font-weight:700}
+  .price-card .s{font-size:11px; color:var(--muted); margin-top:4px}
+  .offline-input{
+    display:flex; align-items:center; gap:8px; margin-bottom:12px;
+  }
+  .offline-input label{font-size:13px; color:var(--muted); flex-shrink:0}
+  .offline-input input{
+    flex:1; background:var(--panel2); border:1px solid var(--line); border-radius:10px;
+    color:var(--text); font-family:var(--mono); font-size:16px; padding:11px 12px;
+    text-align:right; min-width:0;
+  }
+  #verdict{
+    border-radius:12px; padding:13px 14px; font-size:14px; font-weight:700;
+    text-align:center; margin-bottom:12px; display:none;
+  }
+  #verdict.good{display:block; background:rgba(46,204,113,.12); color:var(--good); border:1px solid rgba(46,204,113,.35)}
+  #verdict.bad{display:block; background:rgba(255,107,94,.12); color:var(--bad); border:1px solid rgba(255,107,94,.35)}
+  #verdict small{display:block; font-weight:400; font-size:11px; margin-top:4px; opacity:.85}
+  .sheet-actions{display:flex; gap:8px}
+  .sheet-actions .btn{flex:1; text-align:center}
+
+  /* ── 스캔 기록 ── */
+  #log{
+    flex-shrink:0; max-height:112px; overflow-y:auto;
+    border-top:1px solid var(--line); background:var(--panel);
+  }
+  #log:empty{display:none}
+  .log-row{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:9px 16px; border-bottom:1px solid var(--line);
+    font-size:12px;
+  }
+  .log-row .lname{overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-right:10px}
+  .log-row .lms{font-family:var(--mono); color:var(--muted); flex-shrink:0}
+  .log-row .lms.pass{color:var(--good)}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>최저가 스나이퍼<small>SCAN V1</small></h1>
+  <span class="engine-badge" id="engineBadge">엔진 확인 중…</span>
+</header>
+
+<div id="stage">
+  <video id="video" autoplay muted playsinline></video>
+
+  <div id="finder"><div id="laser"></div></div>
+
+  <div id="hud">
+    <span class="hud-chip">분석 <b id="frameMs">–</b> ms/프레임</span>
+    <span class="hud-chip">경과 <b id="elapsed">0.0</b> s</span>
+  </div>
+
+  <div id="hint">사각 틀 안에 바코드를 맞춰유</div>
+  <button id="torchBtn" aria-label="플래시">🔦</button>
+
+  <!-- 시작 오버레이 -->
+  <div class="overlay" id="startOverlay">
+    <h2 style="font-size:20px">바코드 스캔 시작</h2>
+    <p>카메라 권한을 허용하면 바로 스캔이 시작돼유.<br>목표: <b style="color:var(--laser)">1초 이내 인식</b></p>
+    <button class="btn" id="startBtn">카메라 켜기</button>
+    <p id="envWarn" style="color:#FFD60A; display:none"></p>
+  </div>
+
+  <!-- 오류 오버레이 -->
+  <div class="overlay hidden" id="errorOverlay">
+    <h2 style="font-size:18px">카메라를 못 열었슈</h2>
+    <p id="errorMsg"></p>
+    <button class="btn secondary" id="retryBtn">다시 시도</button>
+  </div>
+
+  <!-- 결과 시트 -->
+  <div id="sheet">
+    <div class="speed-line">
+      <span class="ms" id="scanMs">–</span>
+      <span class="label">ms 인식 (목표 ≤ 1000ms)</span>
+    </div>
+    <div class="prod">
+      <div class="name" id="pName">–</div>
+      <div class="brand" id="pBrand">–</div>
+      <div class="code" id="pCode">–<span class="mockTag">MOCK 데이터</span></div>
+    </div>
+    <div class="price-grid">
+      <div class="price-card">
+        <div class="t">온라인 최저가</div>
+        <div class="v" id="pOnline">–</div>
+        <div class="s" id="pSeller">–</div>
+      </div>
+      <div class="price-card">
+        <div class="t">배송비 포함 총액</div>
+        <div class="v" id="pTotal">–</div>
+        <div class="s" id="pShip">–</div>
+      </div>
+    </div>
+    <div class="offline-input">
+      <label for="offlinePrice">매장 가격</label>
+      <input type="number" inputmode="numeric" id="offlinePrice" placeholder="예: 4500">
+      <span style="color:var(--muted); font-size:13px">원</span>
+    </div>
+    <div id="verdict"></div>
+    <div class="sheet-actions">
+      <button class="btn" id="rescanBtn">다시 스캔</button>
+    </div>
+  </div>
+</div>
+
+<div id="log"></div>
+
+<script>
+(function(){
+  'use strict';
+
+  /* ─────────────────────────────────────────────
+     설정: 속도의 핵심 3요소
+     ① 포맷 3개 제한  ② 중앙 ROI만 분석  ③ 2프레임 확정
+  ───────────────────────────────────────────── */
+  var FORMATS = ['ean_13','ean_8','code_128'];
+  var CONFIRM_FRAMES = 2;          // 같은 값 연속 N프레임이면 확정
+  var ROI = {x:0.08, y:0.33, w:0.84, h:0.34};  // #finder CSS와 일치
+
+  /* mock 상품 사전 — 2단계에서 백엔드 API로 교체될 자리 */
+  var MOCK_DB = {
+    '8801062636089': {name:'초코파이 情 12개입', brand:'오리온', online:4230, ship:0,    seller:'쿠팡 (무료배송)'},
+    '8801043015775': {name:'신라면 5개입 멀티팩', brand:'농심',   online:3450, ship:3000, seller:'11번가'},
+    '8809576260052': {name:'제주삼다수 2L',       brand:'광동제약', online:980,  ship:2500, seller:'네이버 스마트스토어'},
+    '8801094010065': {name:'칠성사이다 1.5L',     brand:'롯데칠성', online:2180, ship:3000, seller:'G마켓'}
+  };
+  function lookupMock(code){
+    if (MOCK_DB[code]) return MOCK_DB[code];
+    // 사전에 없으면 바코드 기반 가짜 데이터 생성 (데모용)
+    var seed = 0; for (var i=0;i<code.length;i++) seed = (seed*31 + code.charCodeAt(i)) >>> 0;
+    var price = 1000 + (seed % 90) * 100;
+    var ship  = (seed % 3 === 0) ? 0 : 3000;
+    return {name:'미등록 상품 (사전 매칭 대기)', brand:'브랜드 미확인',
+            online:price, ship:ship, seller: ship===0 ? '쿠팡 (무료배송)' : '11번가'};
+  }
+
+  /* ── DOM ── */
+  var $ = function(id){ return document.getElementById(id); };
+  var video=$('video'), finder=$('finder'), engineBadge=$('engineBadge');
+  var frameMsEl=$('frameMs'), elapsedEl=$('elapsed'), hintEl=$('hint');
+  var sheet=$('sheet'), logEl=$('log'), torchBtn=$('torchBtn');
+
+  var detector=null, engineName='';
+  var stream=null, track=null;
+  var scanning=false, sessionStart=0, rafId=0, busy=false;
+  var lastVal='', sameCount=0, timerInt=0;
+  var roiCanvas=document.createElement('canvas');
+  var roiCtx=roiCanvas.getContext('2d', {willReadFrequently:true});
+  var currentResult=null;
+
+  /* ── 환경 체크 ── */
+  if (!window.isSecureContext){
+    var w=$('envWarn');
+    w.style.display='block';
+    w.textContent='⚠ 보안 컨텍스트(HTTPS/localhost)가 아니라 카메라가 차단될 수 있어유.';
+  }
+
+  /* ── 엔진 준비: 네이티브 BarcodeDetector 우선, 없으면 ZXing 폴백 ── */
+  function initEngine(){
+    return new Promise(function(resolve){
+      if ('BarcodeDetector' in window){
+        BarcodeDetector.getSupportedFormats().then(function(fmts){
+          var ok = FORMATS.filter(function(f){ return fmts.indexOf(f)>=0; });
+          if (ok.length){
+            detector = new BarcodeDetector({formats: ok});
+            engineName='NATIVE';
+            resolve(true); return;
+          }
+          loadZXing(resolve);
+        }).catch(function(){ loadZXing(resolve); });
+      } else {
+        loadZXing(resolve);
+      }
+    });
+  }
+  function loadZXing(resolve){
+    var s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/zxing-library/0.21.3/index.min.js';
+    s.onload=function(){
+      try{
+        var hints=new Map();
+        hints.set(ZXingBrowser && 0, null); // noop 안전장치
+      }catch(e){}
+      try{
+        var ZX = window.ZXing || window.ZXingLibrary || null;
+        if (ZX && ZX.BrowserMultiFormatReader){
+          var hints2 = new Map();
+          hints2.set(ZX.DecodeHintType.POSSIBLE_FORMATS,
+            [ZX.BarcodeFormat.EAN_13, ZX.BarcodeFormat.EAN_8, ZX.BarcodeFormat.CODE_128]);
+          var reader = new ZX.MultiFormatReader();
+          reader.setHints(hints2);
+          detector = {
+            detect: function(canvas){
+              return new Promise(function(res){
+                try{
+                  var lum = new ZX.HTMLCanvasElementLuminanceSource(canvas);
+                  var bin = new ZX.BinaryBitmap(new ZX.HybridBinarizer(lum));
+                  var r = reader.decodeWithState(bin);
+                  res([{rawValue: r.getText()}]);
+                }catch(e){ res([]); }
+              });
+            }
+          };
+          engineName='ZXING';
+          resolve(true); return;
+        }
+      }catch(e){}
+      resolve(false);
+    };
+    s.onerror=function(){ resolve(false); };
+    document.head.appendChild(s);
+  }
+
+  /* ── 카메라 시작 ── */
+  function startCamera(){
+    var constraints = {
+      audio:false,
+      video:{
+        facingMode:{ideal:'environment'},
+        width:{ideal:1280}, height:{ideal:720},
+        frameRate:{ideal:30}
+      }
+    };
+    return navigator.mediaDevices.getUserMedia(constraints).then(function(s){
+      stream=s; track=s.getVideoTracks()[0];
+      video.srcObject=s;
+      // 연속 초점 시도 (지원 기기 한정)
+      try{
+        var caps = track.getCapabilities ? track.getCapabilities() : {};
+        if (caps.focusMode && caps.focusMode.indexOf('continuous')>=0){
+          track.applyConstraints({advanced:[{focusMode:'continuous'}]}).catch(function(){});
+        }
+        if (caps.torch){ torchBtn.style.display='flex'; }
+      }catch(e){}
+      return new Promise(function(res){
+        if (video.readyState>=2) res();
+        else video.onloadeddata=function(){ res(); };
+      });
+    });
+  }
+
+  /* ── 스캔 루프 ── */
+  function beginSession(){
+    scanning=true; busy=false; lastVal=''; sameCount=0;
+    sessionStart=performance.now();
+    finder.classList.remove('locked');
+    hintEl.textContent='사각 틀 안에 바코드를 맞춰유';
+    clearInterval(timerInt);
+    timerInt=setInterval(function(){
+      elapsedEl.textContent=((performance.now()-sessionStart)/1000).toFixed(1);
+    },100);
+    rafId=requestAnimationFrame(loop);
+  }
+  function stopSession(){
+    scanning=false;
+    cancelAnimationFrame(rafId);
+    clearInterval(timerInt);
+  }
+
+  function loop(){
+    if (!scanning) return;
+    if (!busy && video.videoWidth>0){
+      busy=true;
+      var vw=video.videoWidth, vh=video.videoHeight;
+      var sx=vw*ROI.x, sy=vh*ROI.y, sw=vw*ROI.w, sh=vh*ROI.h;
+      // ROI 크롭: 분석 픽셀 수를 ~1/3.5로 줄여서 프레임당 시간 단축
+      roiCanvas.width=sw|0; roiCanvas.height=sh|0;
+      roiCtx.drawImage(video, sx, sy, sw, sh, 0, 0, sw|0, sh|0);
+      var t0=performance.now();
+      detector.detect(roiCanvas).then(function(codes){
+        frameMsEl.textContent=(performance.now()-t0).toFixed(0);
+        if (scanning && codes && codes.length){
+          handleCandidate(codes[0].rawValue);
+        }
+      }).catch(function(){}).then(function(){
+        busy=false;
+      });
+    }
+    rafId=requestAnimationFrame(loop);
+  }
+
+  function handleCandidate(val){
+    if (!val) return;
+    if (val===lastVal){ sameCount++; } else { lastVal=val; sameCount=1; }
+    if (sameCount>=CONFIRM_FRAMES){
+      confirmScan(val);
+    } else {
+      hintEl.textContent='확인 중…';
+    }
+  }
+
+  function confirmScan(code){
+    var ms = performance.now()-sessionStart;
+    stopSession();
+    finder.classList.add('locked');
+    if (navigator.vibrate) navigator.vibrate(80);
+    showResult(code, ms);
+    addLog(code, ms);
+  }
+
+  /* ── 결과 표시 ── */
+  var won = function(n){ return n.toLocaleString('ko-KR')+'원'; };
+
+  function showResult(code, ms){
+    var p = lookupMock(code);
+    currentResult = p;
+    var msEl=$('scanMs');
+    msEl.textContent=ms.toFixed(0);
+    msEl.className='ms '+(ms<=1000?'pass':'fail');
+    $('pName').textContent=p.name;
+    $('pBrand').textContent=p.brand;
+    $('pCode').firstChild.nodeValue=code;
+    $('pOnline').textContent=won(p.online);
+    $('pSeller').textContent=p.seller;
+    $('pTotal').textContent=won(p.online+p.ship);
+    $('pShip').textContent= p.ship===0 ? '무료배송' : '배송비 '+won(p.ship);
+    $('offlinePrice').value='';
+    var v=$('verdict'); v.className=''; v.style.display='none';
+    sheet.classList.add('open');
+  }
+
+  $('offlinePrice').addEventListener('input', function(){
+    if (!currentResult) return;
+    var off=parseInt(this.value,10);
+    var v=$('verdict');
+    if (!off || off<=0){ v.className=''; v.style.display='none'; return; }
+    var total=currentResult.online+currentResult.ship;
+    var diff=off-total;
+    if (diff>0){
+      v.className='good';
+      v.innerHTML='온라인 구매가 <b>'+won(diff)+'</b> 더 싸유'
+        +'<small>온라인 총액 '+won(total)+' vs 매장 '+won(off)+'</small>';
+    } else if (diff<0){
+      v.className='bad';
+      v.innerHTML='매장 구매가 <b>'+won(-diff)+'</b> 더 싸유 — 그냥 여기서 사유'
+        +'<small>온라인 총액 '+won(total)+' vs 매장 '+won(off)+'</small>';
+    } else {
+      v.className='good';
+      v.innerHTML='동일 가격이유. 급하면 매장, 아니면 아무거나!';
+    }
+  });
+
+  function addLog(code, ms){
+    var p=lookupMock(code);
+    var row=document.createElement('div');
+    row.className='log-row';
+    row.innerHTML='<span class="lname">'+p.name+' <span style="color:var(--muted)">'+code+'</span></span>'
+      +'<span class="lms '+(ms<=1000?'pass':'')+'">'+ms.toFixed(0)+'ms</span>';
+    logEl.insertBefore(row, logEl.firstChild);
+    while (logEl.children.length>20) logEl.removeChild(logEl.lastChild);
+  }
+
+  /* ── 토치 ── */
+  var torchOn=false;
+  torchBtn.addEventListener('click', function(){
+    if (!track) return;
+    torchOn=!torchOn;
+    track.applyConstraints({advanced:[{torch:torchOn}]})
+      .then(function(){ torchBtn.classList.toggle('on', torchOn); })
+      .catch(function(){ torchOn=false; });
+  });
+
+  /* ── 버튼 ── */
+  function boot(){
+    $('startOverlay').classList.add('hidden');
+    $('errorOverlay').classList.add('hidden');
+    initEngine().then(function(ok){
+      if (!ok){
+        engineBadge.textContent='엔진 없음';
+        return fail('이 브라우저는 바코드 해독 엔진을 지원하지 않아유.\nAndroid Chrome에서 열어보셔유.');
+      }
+      engineBadge.textContent = engineName==='NATIVE' ? '● ML Kit 네이티브' : '● ZXing 폴백';
+      engineBadge.classList.add('on');
+      startCamera().then(function(){
+        beginSession();
+      }).catch(function(e){
+        fail('권한을 거부했거나 카메라를 다른 앱이 쓰고 있을 수 있어유.\n('+ e.name +')');
+      });
+    });
+  }
+  function fail(msg){
+    $('errorMsg').textContent=msg;
+    $('errorOverlay').classList.remove('hidden');
+  }
+  $('startBtn').addEventListener('click', boot);
+  $('retryBtn').addEventListener('click', boot);
+  $('rescanBtn').addEventListener('click', function(){
+    sheet.classList.remove('open');
+    setTimeout(beginSession, 150);
+  });
+
+  /* 화면 이탈 시 카메라 정지(배터리 절약) */
+  document.addEventListener('visibilitychange', function(){
+    if (document.hidden){ stopSession(); }
+    else if (stream && !sheet.classList.contains('open')){ beginSession(); }
+  });
+})();
+</script>
+</body>
+</html>
