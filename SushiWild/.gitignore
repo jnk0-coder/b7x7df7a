@@ -10,3 +10,4 @@ DerivedDataCache/
 *.sdf
 *.suo
 balance_test
+BuildLog.txt

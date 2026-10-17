@@ -13,6 +13,14 @@
 
 ## 1. 실행 방법
 
+### 가장 쉬운 방법: 더블클릭 한 번 (Windows)
+Unreal Engine 5.5 이상과 Visual Studio 2022("C++를 사용한 게임 개발")가 설치돼 있으면 됩니다.
+
+- **`BuildAndPlay.bat`** 더블클릭 → 설치된 엔진을 찾고, 프로젝트 버전을 맞추고, 빌드한 뒤 **게임을 바로 켭니다.**
+- **`OpenEditor.bat`** 더블클릭 → 같은 과정을 거친 뒤 **에디터**를 엽니다.
+- 빌드가 실패하면 같은 폴더에 **`BuildLog.txt`** 가 생깁니다. 이 파일을 보내 주면 고쳐 드립니다.
+
+### 손으로 하는 방법
 1. **Unreal Engine 5.5 이상**을 설치합니다 (Epic Games Launcher).
 2. Windows라면 **Visual Studio 2022**를 설치합니다. 설치할 때 "C++를 사용한 게임 개발" 워크로드를 고릅니다.
 3. `SushiWild/SushiWild.uproject`를 **오른쪽 클릭 → Generate Visual Studio project files**를 누릅니다.
