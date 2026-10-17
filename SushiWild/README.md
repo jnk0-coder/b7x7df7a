@@ -19,6 +19,7 @@ Unreal Engine 5.5 이상과 Visual Studio 2022("C++를 사용한 게임 개발")
 - **`BuildAndPlay.bat`** 더블클릭 → 설치된 엔진을 찾고, 프로젝트 버전을 맞추고, 빌드한 뒤 **게임을 바로 켭니다.**
 - **`OpenEditor.bat`** 더블클릭 → 같은 과정을 거친 뒤 **에디터**를 엽니다.
 - 빌드가 실패하면 같은 폴더에 **`BuildLog.txt`** 가 생깁니다. 이 파일을 보내 주면 고쳐 드립니다.
+- `SDK validation failed` 처럼 **C++ 도구나 Windows SDK가 없어서** 실패하면, 스크립트가 Visual Studio 부품(게임 개발 C++ · MSVC · Windows 11 SDK)을 대신 설치하고 다시 빌드할지 물어봅니다. 관리자 권한 창에서 "예"를 누르면 됩니다.
 
 ### 손으로 하는 방법
 1. **Unreal Engine 5.5 이상**을 설치합니다 (Epic Games Launcher).

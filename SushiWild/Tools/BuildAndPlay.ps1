@@ -58,11 +58,70 @@ if ($NewText -ne $Text) {
     Say "프로젝트 엔진 버전을 $EngineVersion 으로 맞췄슈." Green
 }
 
-# 3) 빌드 (Visual Studio 2022 의 'C++를 사용한 게임 개발' 이 필요)
-Say '빌드 시작… 처음엔 5~15분 걸려유. 커피 한 잔 하셔유.' Cyan
+# 3) 빌드 (Visual Studio 의 'C++를 사용한 게임 개발' + Windows 10/11 SDK 가 필요)
 $BuildBat = Join-Path $Engine.Path 'Engine\Build\BatchFiles\Build.bat'
-& $BuildBat SushiWildEditor Win64 Development "-Project=$Project" -WaitMutex 2>&1 | Tee-Object -FilePath $Log
-if ($LASTEXITCODE -ne 0) {
+
+function Invoke-SushiBuild {
+    Say '빌드 시작… 처음엔 5~15분 걸려유. 커피 한 잔 하셔유.' Cyan
+    # Out-Host: 빌드 출력이 함수의 반환값에 섞이지 않게 화면으로만 보낸다
+    & $BuildBat SushiWildEditor Win64 Development "-Project=$Project" -WaitMutex 2>&1 | Tee-Object -FilePath $Log | Out-Host
+    return $LASTEXITCODE
+}
+
+# C++ 공구 상자(Visual Studio C++ 도구 + Windows SDK)가 없을 때 대신 설치해 준다.
+function Install-BuildTools {
+    $Components = @(
+        'Microsoft.VisualStudio.Workload.NativeGame',          # C++를 사용한 게임 개발
+        'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',   # MSVC 컴파일러
+        'Microsoft.VisualStudio.Component.Windows11SDK.22621'  # Windows SDK (10.0.19041 이상이면 됨)
+    )
+    $AddArgs = ($Components | ForEach-Object { "--add $_" }) -join ' '
+    $InstallerDir = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer'
+    $VsWhere = Join-Path $InstallerDir 'vswhere.exe'
+    $VsPath = $null
+    if (Test-Path $VsWhere) {
+        $VsPath = & $VsWhere -latest -products * -property installationPath
+    }
+
+    Say '관리자 권한을 묻는 창이 뜨면 "예"를 눌러 주셔유. 설치는 10~30분 걸려유.' Yellow
+    if ($VsPath) {
+        # 이미 깔린 Visual Studio 에 빠진 부품만 추가
+        $Setup = Join-Path $InstallerDir 'setup.exe'
+        $Proc = Start-Process $Setup -ArgumentList "modify --installPath `"$VsPath`" $AddArgs --includeRecommended --passive --norestart" -Verb RunAs -Wait -PassThru
+    }
+    elseif (Get-Command winget -ErrorAction SilentlyContinue) {
+        # Visual Studio 가 아예 없으면 Community 2022 를 필요한 부품과 함께 설치
+        $Proc = Start-Process winget -ArgumentList "install --id Microsoft.VisualStudio.2022.Community -e --accept-package-agreements --accept-source-agreements --override `"$AddArgs --includeRecommended --passive --wait --norestart`"" -Verb RunAs -Wait -PassThru
+    }
+    else {
+        Say 'winget 이 없어서 자동 설치를 못 하겠슈. visualstudio.microsoft.com 에서 Visual Studio 2022 Community 를 받아' Red
+        Say '"C++를 사용한 게임 개발" 과 "Windows 11 SDK" 를 체크해서 설치해 주셔유.' Red
+        return $false
+    }
+    # 3010 = 설치는 됐고 재부팅 권장
+    return ($Proc.ExitCode -eq 0 -or $Proc.ExitCode -eq 3010)
+}
+
+$Result = Invoke-SushiBuild
+if ($Result -ne 0) {
+    $LogText = Get-Content $Log -Raw -ErrorAction SilentlyContinue
+    $MissingTools = $LogText -match 'SDK validation failed|not a valid platform to build|Visual Studio .* (must be|is not) installed|No valid Visual C\+\+|Unable to find valid .*toolchain'
+    if ($MissingTools) {
+        Say ''
+        Say '빌드에 필요한 C++ 공구 상자(Windows SDK / Visual Studio C++)가 없슈.' Yellow
+        $Answer = Read-Host '지가 대신 설치하고 다시 빌드할까유? (Y/N, 그냥 엔터 = Y)'
+        if ($Answer -eq '' -or $Answer -match '^[Yy예ㅇ]') {
+            if (Install-BuildTools) {
+                Say '설치 끝! 다시 빌드해유.' Green
+                $Result = Invoke-SushiBuild
+            }
+            else {
+                Say '설치가 끝나지 않았거나 실패했슈. 컴퓨터를 한 번 재시작한 뒤 BuildAndPlay.bat 을 다시 실행해 주셔유.' Red
+            }
+        }
+    }
+}
+if ($Result -ne 0) {
     Say ''
     Say '빌드가 실패했슈.' Red
     Say '아래 BuildLog.txt 파일을 티모시(Claude)한테 보내 주시면 고쳐 드릴게유:' Yellow
