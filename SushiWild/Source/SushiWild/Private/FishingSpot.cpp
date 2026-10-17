@@ -1,6 +1,7 @@
 ﻿#include "FishingSpot.h"
 
 #include "Engine/Canvas.h"
+#include "Engine/World.h"
 #include "SushiBalance.h"
 #include "SushiCatalog.h"
 #include "SushiChefCharacter.h"

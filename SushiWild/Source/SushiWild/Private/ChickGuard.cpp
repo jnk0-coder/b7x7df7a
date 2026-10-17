@@ -2,6 +2,7 @@
 
 #include "Components/SphereComponent.h"
 #include "CornBait.h"
+#include "Engine/World.h"
 #include "EngineUtils.h"
 #include "Kismet/GameplayStatics.h"
 #include "KokoleoneNest.h"

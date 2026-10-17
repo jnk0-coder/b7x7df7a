@@ -6,6 +6,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "CornBait.h"
 #include "Engine/LocalPlayer.h"
+#include "Engine/World.h"
 #include "EngineUtils.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"

@@ -3,6 +3,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "CornBait.h"
 #include "Engine/Canvas.h"
+#include "Engine/World.h"
 #include "EngineUtils.h"
 #include "Kismet/GameplayStatics.h"
 #include "SushiCatalog.h"

@@ -1,5 +1,6 @@
 ﻿#include "SushiCustomer.h"
 
+#include "Engine/World.h"
 #include "SushiChefCharacter.h"
 #include "SushiShapes.h"
 #include "SushiWildGameState.h"
